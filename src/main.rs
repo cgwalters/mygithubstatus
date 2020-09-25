@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::prelude::*;
 use serde_derive::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,8 @@ pub struct Payload {
     pub pull_request: Option<PullRequest>,
     pub issue: Option<Issue>,
     pub comment: Option<Comment>,
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +154,7 @@ enum PullRequestAction {
 struct RepoEvents {
     pr_action: BTreeMap<String, PullRequestAction>,
     reviewed: BTreeMap<String, ReviewReaction>,
+    pushed: u32,
     issues: BTreeMap<String, IssueActivity>,
     titles: HashMap<String, String>,
 }
@@ -163,6 +166,9 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>) -> ParsedRepoEvent
     for e in events {
         let repoevents = r.entry(e.repo.name.clone()).or_default();
         match e.typ.as_str() {
+            "PushEvent" => {
+                repoevents.pushed += 1;
+            }
             "PullRequestEvent" => {
                 let pr = e.payload.pull_request.as_ref().unwrap();
                 let url = pr.html_url.as_str();
@@ -172,33 +178,44 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>) -> ParsedRepoEvent
                     _ => continue,
                 };
                 repoevents.pr_action.entry(url.to_string()).or_insert(v);
-                repoevents.titles.entry(url.to_string()).or_insert_with(|| pr.title.clone());
+                repoevents
+                    .titles
+                    .entry(url.to_string())
+                    .or_insert_with(|| pr.title.clone());
             }
             "PullRequestReviewEvent" => {
                 let review = e.payload.review.as_ref().unwrap();
                 let pr = e.payload.pull_request.as_ref().unwrap();
                 let url = pr.html_url.as_str();
-                repoevents.reviewed.entry(url.to_string()).or_insert_with(|| {
-                    match review.state.as_str() {
+                repoevents
+                    .reviewed
+                    .entry(url.to_string())
+                    .or_insert_with(|| match review.state.as_str() {
                         "approved" => ReviewReaction::Approved,
                         _ => ReviewReaction::Other,
-                    }
-                });
-                repoevents.titles.entry(url.to_string()).or_insert_with(|| pr.title.clone());
-            },
+                    });
+                repoevents
+                    .titles
+                    .entry(url.to_string())
+                    .or_insert_with(|| pr.title.clone());
+            }
             "IssueCommentEvent" => {
                 let issue = e.payload.issue.as_ref().unwrap();
                 let url = issue.html_url.as_str();
-                repoevents.issues.entry(url.to_string()).or_insert_with(|| {
-                    IssueActivity {
+                repoevents
+                    .issues
+                    .entry(url.to_string())
+                    .or_insert_with(|| IssueActivity {
                         state: None,
-                        commented: true
-                    }
-                });
-                repoevents.titles.entry(url.to_string()).or_insert_with(|| issue.title.clone());
-            },
+                        commented: true,
+                    });
+                repoevents
+                    .titles
+                    .entry(url.to_string())
+                    .or_insert_with(|| issue.title.clone());
+            }
             // "IssuesEvent" => render_issue,
-             _ => continue,
+            _ => continue,
         };
     }
     for (_, events) in r.iter_mut() {
@@ -211,12 +228,12 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>) -> ParsedRepoEvent
             // Don't double-count discussion on reviewed PRs
             events.issues.remove(url);
         }
-    };
+    }
     r
 }
 
 fn link<L: AsRef<str>, T: AsRef<str>>(link: L, title: T) -> String {
-    format!("[{}]({})", title.as_ref(), link.as_ref().trim())
+    format!("[{}]({})", title.as_ref().trim(), link.as_ref().trim())
 }
 
 // fn render_issue(e: &Event) -> String {
@@ -240,10 +257,7 @@ fn print_events(events: &ParsedRepoEvents) {
             println!("Pull Requests: ");
             for (url, _) in events.pr_action.iter() {
                 let title = events.titles.get(url).map(|s| s.as_str()).unwrap_or("");
-                println!(
-                    "  - 🆕 {}",
-                    link(url.as_str(), title)
-                );
+                println!("  - 🆕 {}", link(url.as_str(), title));
             }
             println!();
         }
@@ -255,11 +269,7 @@ fn print_events(events: &ParsedRepoEvents) {
                     ReviewReaction::Other => "📋",
                 };
                 let title = events.titles.get(url).map(|s| s.as_str()).unwrap_or("");
-                println!(
-                    "  - {} {}",
-                    prefix,
-                    link(url.as_str(), title)
-                );
+                println!("  - {} {}", prefix, link(url.as_str(), title));
             }
             println!();
         }
@@ -267,12 +277,13 @@ fn print_events(events: &ParsedRepoEvents) {
             println!("Commented: ");
             for (url, _) in events.issues.iter() {
                 let title = events.titles.get(url).map(|s| s.as_str()).unwrap_or("");
-                println!(
-                    "  - 📝 {}",
-                    link(url.as_str(), title)
-                );
+                println!("  - 📝 {}", link(url.as_str(), title));
             }
             println!();
+        }
+        if events.pushed > 0 {
+            println!("Pushed {} times", events.pushed);
+            println!()
         }
     }
 }
