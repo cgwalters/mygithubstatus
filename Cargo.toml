@@ -21,3 +21,6 @@ github_v3 = "0.3.2"
 log = "0.4"
 simple_logger = "1.9.0"
 
+[patch.crates-io]
+github_v3 = { path = "../../../gitlab/crates.rs/crates.rs/github_v3/" }
+

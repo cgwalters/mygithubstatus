@@ -1,8 +1,10 @@
 use anyhow::Result;
 use chrono::prelude::*;
 use serde_derive::*;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use structopt::StructOpt;
+
+const STARTING_HOUR: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,8 +81,8 @@ pub struct Event {
 #[structopt(rename_all = "kebab-case")]
 /// Main options struct
 struct Opt {
-    #[structopt(long, default_value = "1")]
-    days: u32,
+    #[structopt(long, default_value = "0")]
+    previous_day: u32,
     #[structopt(long)]
     user: String,
     #[structopt(long)]
@@ -103,20 +105,21 @@ async fn query(client: &github_v3::Client, user: &str, page: u32) -> Result<Vec<
 async fn my_events(
     client: &github_v3::Client,
     user: &str,
-    end: &chrono::DateTime<Utc>,
+    start: &chrono::DateTime<Local>,
 ) -> Result<Vec<Box<Event>>> {
-    let mut page = 1u32;
+    let mut page = 0u32;
     let mut r = Vec::new();
     let pagelimit = 5;
     loop {
-        println!("Querying page: {}", page);
+        println!("<!-- Querying page: {} -->", page);
         let mut events: Vec<Event> = query(client, user, page).await?;
         let mut found = false;
         for e in events.drain(..) {
             if e.actor.login != user {
                 continue;
             }
-            let in_timestamp = &e.created_at >= end;
+            let t = &e.created_at;
+            let in_timestamp = t > start;
             if !in_timestamp {
                 continue;
             }
@@ -161,9 +164,21 @@ struct RepoEvents {
 
 type ParsedRepoEvents = BTreeMap<String, RepoEvents>;
 
-fn parse_events(events: impl IntoIterator<Item = Box<Event>>) -> ParsedRepoEvents {
+fn parse_events(events: impl IntoIterator<Item = Box<Event>>,     start: &chrono::DateTime<Local>,
+    end: &chrono::DateTime<Local>,) -> ParsedRepoEvents {
+    let mut before = 0u32;
+    let mut after = 0u32;
     let mut r: ParsedRepoEvents = Default::default();
     for e in events {
+        let t = &e.created_at;
+        if t > end {
+            after += 1;
+            continue
+        }
+        if t < start {
+            before += 1;
+            continue
+        }
         let repoevents = r.entry(e.repo.name.clone()).or_default();
         match e.typ.as_str() {
             "PushEvent" => {
@@ -229,6 +244,8 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>) -> ParsedRepoEvent
             events.issues.remove(url);
         }
     }
+    dbg!(before);
+    dbg!(after);
     r
 }
 
@@ -252,7 +269,7 @@ fn print_events(events: &ParsedRepoEvents) {
             format!("https://github.com/{}", repo.as_str()),
             repo.as_str(),
         );
-        println!("{}", l);
+        println!("### {}", l);
         if !events.pr_action.is_empty() {
             println!("Pull Requests: ");
             for (url, _) in events.pr_action.iter() {
@@ -294,16 +311,17 @@ async fn main() -> Result<()> {
     let opt = Opt::from_args();
     let user = opt.user.as_str();
     let c = github_v3::Client::new_from_env();
-    let now = Utc::now();
-    let end = now - chrono::Duration::days(opt.days as i64);
+    let day = Local::today() - chrono::Duration::days(opt.previous_day as i64);
+    let start = (day - chrono::Duration::days(1)).and_hms(STARTING_HOUR, 0, 0);
+    let end = day.and_hms(STARTING_HOUR, 0, 0);
     let raw_events = if let Some(ref f) = opt.from_file {
         let f = std::io::BufReader::new(std::fs::File::open(f.as_str())?);
         serde_json::from_reader(f)?
     } else {
-        my_events(&c, user, &end).await?
+        my_events(&c, user, &start).await?
     };
-    println!("Events from {} to {}", end, now);
-    let events = parse_events(raw_events);
+    println!("Events from {} to {}", start, end);
+    let events = parse_events(raw_events, &start, &end);
     print_events(&events);
     Ok(())
 }
