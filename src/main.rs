@@ -312,7 +312,11 @@ async fn main() -> Result<()> {
     let user = opt.user.as_str();
     let c = github_v3::Client::new_from_env();
     let day = Local::today() - chrono::Duration::days(opt.previous_day as i64);
-    let start = (day - chrono::Duration::days(1)).and_hms(STARTING_HOUR, 0, 0);
+    let span = match day.weekday() {
+        chrono::Weekday::Mon => 3,
+        _ => 1,
+    };
+    let start = (day - chrono::Duration::days(span)).and_hms(STARTING_HOUR, 0, 0);
     let end = day.and_hms(STARTING_HOUR, 0, 0);
     let raw_events = if let Some(ref f) = opt.from_file {
         let f = std::io::BufReader::new(std::fs::File::open(f.as_str())?);
