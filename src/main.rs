@@ -244,8 +244,6 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>,     start: &chrono
             events.issues.remove(url);
         }
     }
-    dbg!(before);
-    dbg!(after);
     r
 }
 
