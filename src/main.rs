@@ -164,20 +164,29 @@ struct RepoEvents {
 
 type ParsedRepoEvents = BTreeMap<String, RepoEvents>;
 
-fn parse_events(events: impl IntoIterator<Item = Box<Event>>,     start: &chrono::DateTime<Local>,
-    end: &chrono::DateTime<Local>,) -> ParsedRepoEvents {
-    let mut before = 0u32;
-    let mut after = 0u32;
+struct RepoEventParseData {
+    repos: ParsedRepoEvents,
+    before: u32,
+    after: u32,
+}
+
+fn parse_events(
+    events: impl IntoIterator<Item = Box<Event>>,
+    start: &chrono::DateTime<Local>,
+    end: &chrono::DateTime<Local>,
+) -> RepoEventParseData {
     let mut r: ParsedRepoEvents = Default::default();
+    let mut before = 0;
+    let mut after = 0;
     for e in events {
         let t = &e.created_at;
         if t > end {
             after += 1;
-            continue
+            continue;
         }
         if t < start {
             before += 1;
-            continue
+            continue;
         }
         let repoevents = r.entry(e.repo.name.clone()).or_default();
         match e.typ.as_str() {
@@ -244,7 +253,11 @@ fn parse_events(events: impl IntoIterator<Item = Box<Event>>,     start: &chrono
             events.issues.remove(url);
         }
     }
-    r
+    RepoEventParseData {
+        repos: r,
+        before,
+        after,
+    }
 }
 
 fn link<L: AsRef<str>, T: AsRef<str>>(link: L, title: T) -> String {
@@ -261,8 +274,9 @@ fn link<L: AsRef<str>, T: AsRef<str>>(link: L, title: T) -> String {
 //     format!("{}{}", prefix, issue.html_url)
 // }
 
-fn print_events(events: &ParsedRepoEvents) {
-    for (repo, events) in events {
+fn print_events(events: &RepoEventParseData) {
+    println!("<!-- before: {} after: {} -->", events.before, events.after);
+    for (repo, events) in events.repos.iter() {
         let l = link(
             format!("https://github.com/{}", repo.as_str()),
             repo.as_str(),
